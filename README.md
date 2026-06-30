@@ -54,6 +54,27 @@ Attaching to both ports makes filtering symmetric. Traffic is checked regardless
 
 ## Network Topology
 
+Text overview:
+
+The lab uses a three-node linear topology: `node1 <-> filter-switch <-> node2`. The two end hosts generate VLAN-tagged traffic using VLAN subinterfaces. The middle node acts as a Linux bridge and enforcement point. The XDP program is attached to both bridge-facing interfaces on `filter-switch`, so packets are inspected before normal bridge forwarding.
+
+```text
++------------------+        +---------------------------+        +------------------+
+|      node1       |        |       filter-switch       |        |      node2       |
+|                  |        |                           |        |                  |
+| eth1.100         |        | eth1 -- br0 -- eth2       |        | eth1.100         |
+| 10.100.0.1/24    |<------>| XDP          XDP          |<------>| 10.100.0.2/24    |
+|                  |        |                           |        |                  |
+| eth1.200         |        | VLAN bridge/enforcement   |        | eth1.200         |
+| 10.200.0.1/24    |<------>|                           |<------>| 10.200.0.2/24    |
++------------------+        +---------------------------+        +------------------+
+
+VLAN 100: allowed
+VLAN 200: dropped
+```
+
+The diagram below shows the same topology with the VLAN subinterfaces and the XDP attachment points.
+
 ```mermaid
 flowchart LR
     subgraph N1[node1]
@@ -83,6 +104,7 @@ flowchart LR
     N2E -. VLAN 100 .- N2100
     N2E -. VLAN 200 .- N2200
 ```
+
 
 ## VLAN Policy
 
@@ -409,3 +431,4 @@ This submission implements and validates the Basic and Intermediate requirements
 | Dynamic user-space policy control | Not implemented |
 
 The Advanced requirement, dynamic policy changes via maps, is intentionally left as future work. A future version would add a policy map controlled from user space so VLAN pass/drop behavior could be changed without recompiling or reattaching the XDP program. That functionality is not included or claimed in this submission.
+
