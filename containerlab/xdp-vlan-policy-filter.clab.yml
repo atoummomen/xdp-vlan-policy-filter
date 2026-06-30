@@ -1,0 +1,38 @@
+name: xdp-vlan-policy-filter
+
+topology:
+  defaults:
+    kind: linux
+    image: xdp-vlan-policy-filter:latest
+
+  nodes:
+    node1:
+      binds:
+        - configs/node1.cfg:/etc/nodes/node1.cfg:ro
+        - bin/entrypoint.sh:/entrypoint.sh:ro
+      exec:
+        - bash /entrypoint.sh
+
+    filter-switch:
+      binds:
+        - configs/filter-switch.cfg:/etc/nodes/filter-switch.cfg:ro
+        - /sys/kernel/debug:/sys/kernel/debug:ro
+        - ../src/:/work/bpf:ro
+        - bin/entrypoint.sh:/entrypoint.sh:ro
+      exec:
+        - bash /entrypoint.sh
+
+    node2:
+      binds:
+        - configs/node2.cfg:/etc/nodes/node2.cfg:ro
+        - bin/entrypoint.sh:/entrypoint.sh:ro
+      exec:
+        - bash /entrypoint.sh
+
+  links:
+    - endpoints:
+        - node1:eth1
+        - filter-switch:eth1
+    - endpoints:
+        - filter-switch:eth2
+        - node2:eth1
