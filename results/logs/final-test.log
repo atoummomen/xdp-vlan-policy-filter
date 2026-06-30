@@ -1,0 +1,22 @@
+=== XDP VLAN policy test ===
+VLAN 100 should pass
+PING 10.100.0.2 (10.100.0.2) from 10.100.0.1 eth1.100: 56(84) bytes of data.
+64 bytes from 10.100.0.2: icmp_seq=1 ttl=64 time=13.6 ms
+64 bytes from 10.100.0.2: icmp_seq=2 ttl=64 time=0.103 ms
+64 bytes from 10.100.0.2: icmp_seq=3 ttl=64 time=0.098 ms
+
+--- 10.100.0.2 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2063ms
+rtt min/avg/max/mdev = 0.098/4.592/13.576/6.352 ms
+[OK] VLAN 100 passed as expected
+
+VLAN 200 should drop
+PING 10.200.0.2 (10.200.0.2) from 10.200.0.1 eth1.200: 56(84) bytes of data.
+From 10.200.0.1 icmp_seq=1 Destination Host Unreachable
+From 10.200.0.1 icmp_seq=2 Destination Host Unreachable
+From 10.200.0.1 icmp_seq=3 Destination Host Unreachable
+
+--- 10.200.0.2 ping statistics ---
+3 packets transmitted, 0 received, +3 errors, 100% packet loss, time 2051ms
+pipe 3
+[OK] VLAN 200 dropped as expected

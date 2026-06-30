@@ -1,0 +1,7 @@
+=== XDP VLAN filter counters on clab-xdp-vlan-policy-filter-filter-switch ===
+Counters: seen/pass/drop
+Expected after VLAN tests: VLAN 100 pass increases, VLAN 200 drop increases, untagged stays 0 for VLAN traffic.
+
+VLAN 100     seen=22       pass=22       drop=0
+VLAN 200     seen=8        pass=0        drop=8
+untagged     seen=2        pass=2        drop=0
