@@ -71,39 +71,115 @@ Step details:
 
 ## Execution Workflow
 
-The project is executed in stages. Each script prepares one part of the lab lifecycle, from building the BPF object to validating the VLAN policy.
+The project is not driven by a single script only. It is a workflow where source files, build helpers, Containerlab assets, node configuration files, and validation scripts work together. The following diagram shows what each stage consumes, what it produces, and how the main repository components interact.
 
 ```mermaid
-flowchart TD
-    A[build-bpf.sh] --> B[Generate BPF artifacts<br/>src/vmlinux.h<br/>src/vlan_filter.bpf.o]
-    B --> C[deploy.sh]
-    C --> D[Build Docker image<br/>Deploy Containerlab topology]
-    D --> E[attach-xdp.sh]
-    E --> F[Load XDP program with bpftool<br/>Pin BPF maps<br/>Attach XDP to eth1 and eth2]
-    F --> G[test.sh]
-    G --> H[Generate VLAN traffic from node1<br/>VLAN 100 should pass<br/>VLAN 200 should drop]
-    H --> I[show-stats.sh]
-    I --> J[Read BPF maps<br/>Print seen/pass/drop counters]
+flowchart LR
+
+    subgraph BUILD["1. Build BPF Object"]
+        SRC["src/vlan_filter.bpf.c<br/>src/Makefile"]
+        BPFBUILDER["bpf-builder/Dockerfile"]
+        BUILDBPF["scripts/build-bpf.sh"]
+        ARTIFACTS["Generated artifacts<br/>src/vmlinux.h<br/>src/vlan_filter.bpf.o"]
+    end
+
+    SRC --> BUILDBPF
+    BPFBUILDER --> BUILDBPF
+    BUILDBPF --> ARTIFACTS
+
+    subgraph DEPLOY["2. Deploy Lab"]
+        DOCKERFILE["Dockerfile"]
+        TOPOLOGY["containerlab/xdp-vlan-policy-filter.clab.yml"]
+        ENTRYPOINT["containerlab/bin/entrypoint.sh"]
+        CONFIGS["containerlab/configs/<br/>node1.cfg<br/>node2.cfg<br/>filter-switch.cfg"]
+        DEPLOYSH["scripts/deploy.sh"]
+        IMAGE["Docker image<br/>xdp-vlan-policy-filter:latest"]
+    end
+
+    DOCKERFILE --> DEPLOYSH
+    TOPOLOGY --> DEPLOYSH
+    ENTRYPOINT --> DEPLOYSH
+    CONFIGS --> DEPLOYSH
+    DEPLOYSH --> IMAGE
+
+    subgraph RUNTIME["3. Runtime Topology"]
+        NODE1["node1<br/>eth1.100 / eth1.200"]
+        SWITCH["filter-switch<br/>eth1 -- br0 -- eth2"]
+        NODE2["node2<br/>eth1.100 / eth1.200"]
+    end
+
+    IMAGE --> NODE1
+    IMAGE --> SWITCH
+    IMAGE --> NODE2
+    ENTRYPOINT --> NODE1
+    ENTRYPOINT --> SWITCH
+    ENTRYPOINT --> NODE2
+    CONFIGS --> NODE1
+    CONFIGS --> SWITCH
+    CONFIGS --> NODE2
+
+    NODE1 <--> SWITCH
+    SWITCH <--> NODE2
+
+    subgraph ATTACH["4. Attach XDP"]
+        ATTACHSH["scripts/attach-xdp.sh"]
+        BPFOBJ["src/vlan_filter.bpf.o"]
+        XDPPORTS["XDP attached on<br/>filter-switch eth1 and eth2"]
+        MAPS["Pinned BPF maps<br/>seen_counter<br/>pass_counter<br/>drop_counter"]
+    end
+
+    ARTIFACTS --> BPFOBJ
+    BPFOBJ --> ATTACHSH
+    SWITCH --> ATTACHSH
+    ATTACHSH --> XDPPORTS
+    ATTACHSH --> MAPS
+
+    subgraph VALIDATE["5. Validate Policy"]
+        TESTSH["scripts/test.sh"]
+        VLAN100["VLAN 100 traffic<br/>expected: pass"]
+        VLAN200["VLAN 200 traffic<br/>expected: drop"]
+    end
+
+    NODE1 --> TESTSH
+    NODE2 --> TESTSH
+    XDPPORTS --> TESTSH
+    TESTSH --> VLAN100
+    TESTSH --> VLAN200
+
+    subgraph STATS["6. Read Counters and Evidence"]
+        SHOWSTATS["scripts/show-stats.sh"]
+        BPFT["bpftool<br/>net and map inspection"]
+        COUNTERS["seen / pass / drop<br/>counter totals"]
+        LOGS["results/logs/<br/>final-test.log<br/>final-stats.log<br/>final-bpftool-net.log"]
+    end
+
+    MAPS --> SHOWSTATS
+    XDPPORTS --> BPFT
+    SHOWSTATS --> COUNTERS
+    TESTSH --> LOGS
+    SHOWSTATS --> LOGS
+    BPFT --> LOGS
+
+    subgraph CLEANUP["7. Cleanup"]
+        DESTROY["scripts/destroy.sh"]
+        REMOVED["Destroy Containerlab topology<br/>Remove lab Docker image"]
+    end
+
+    DESTROY --> REMOVED
 ```
 
----
+| Stage | Main script or file              | Role                                                                                                             |
+| ----: | -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+|     1 | `scripts/build-bpf.sh`           | Builds the eBPF object from `src/vlan_filter.bpf.c` and generates the BPF build artifacts.                       |
+|     2 | `scripts/deploy.sh`              | Builds the Docker image and deploys the Containerlab topology.                                                   |
+|     3 | `containerlab/bin/entrypoint.sh` | Configures VLAN interfaces, bridge ports, MTU, VLAN offload/reordering behavior, and bpffs inside the lab nodes. |
+|     4 | `containerlab/configs/*.cfg`     | Provides per-node configuration for `node1`, `node2`, and `filter-switch`.                                       |
+|     5 | `scripts/attach-xdp.sh`          | Loads `src/vlan_filter.bpf.o`, pins BPF maps, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
+|     6 | `scripts/test.sh`                | Sends VLAN 100 and VLAN 200 test traffic from `node1` toward `node2`.                                            |
+|     7 | `scripts/show-stats.sh`          | Reads the pinned BPF maps and prints per-VLAN `seen/pass/drop` counters.                                         |
+|     8 | `scripts/destroy.sh`             | Destroys the Containerlab topology and removes the lab Docker image after testing.                               |
 
-### Workflow Summary
-
-| Step | Script | What Happens |
-|------|--------|--------------|
-| 1 | `build-bpf.sh` | Generates `src/vmlinux.h` and compiles `src/vlan_filter.bpf.c` into `src/vlan_filter.bpf.o`. |
-| 2 | `deploy.sh` | Builds the lab Docker image and deploys the Containerlab topology. |
-| 3 | `attach-xdp.sh` | Loads the BPF object, pins maps under `/sys/fs/bpf`, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
-| 4 | `test.sh` | Sends test traffic from `node1` to `node2` on VLAN 100 and VLAN 200. |
-| 5 | `show-stats.sh` | Reads the pinned BPF maps and prints per-VLAN seen/pass/drop counters. |
-| 6 | `destroy.sh` | Destroys the Containerlab topology and removes the lab Docker image when testing is finished. |
-
----
-
-## Packet Processing Path
-
-During testing, the main packet path is:
+During the functional test, the main packet path is:
 
 ```text
 node1 VLAN subinterface
@@ -115,26 +191,14 @@ node1 eth1
 filter-switch eth1
         |
         v
-XDP program checks VLAN ID
+XDP program checks the VLAN ID
         |
         +--> VLAN 100: XDP_PASS -> br0 -> eth2 -> node2
         |
         +--> VLAN 200: XDP_DROP -> packet stops at filter-switch
 ```
 
----
-
-## Counter Behavior
-
-The counters are updated by the XDP program during packet processing.
-
-They do **not** decide the filtering policy.
-
-Their role is only to record what happened after packet classification:
-
-- **Seen counter** → packet with this VLAN ID was received
-- **Pass counter** → packet was allowed (`XDP_PASS`)
-- **Drop counter** → packet was blocked (`XDP_DROP`)
+The counters are updated by the XDP program during packet processing. They do not decide the policy; they record what happened after the packet was classified.
 
 ## Expected Results
 
