@@ -2,37 +2,55 @@ name: xdp-vlan-policy-filter
 
 topology:
   defaults:
+    # All nodes are Linux containers based on the local lab image.
     kind: linux
     image: xdp-vlan-policy-filter:latest
 
   nodes:
     node1:
       binds:
+        # Per-node VLAN configuration.
         - configs/node1.cfg:/etc/nodes/node1.cfg:ro
+
+        # Shared startup script executed when the container starts.
         - bin/entrypoint.sh:/entrypoint.sh:ro
       exec:
         - bash /entrypoint.sh
 
     filter-switch:
       binds:
+        # Switch-specific bridge configuration.
         - configs/filter-switch.cfg:/etc/nodes/filter-switch.cfg:ro
+
+        # Debug filesystem is exposed read-only for BPF/XDP inspection tools.
         - /sys/kernel/debug:/sys/kernel/debug:ro
+
+        # The compiled BPF object from src/ is mounted read-only into the switch.
+        # attach-xdp.sh loads the object from this path.
         - ../src/:/work/bpf:ro
+
+        # Shared startup script executed when the container starts.
         - bin/entrypoint.sh:/entrypoint.sh:ro
       exec:
         - bash /entrypoint.sh
 
     node2:
       binds:
+        # Per-node VLAN configuration.
         - configs/node2.cfg:/etc/nodes/node2.cfg:ro
+
+        # Shared startup script executed when the container starts.
         - bin/entrypoint.sh:/entrypoint.sh:ro
       exec:
         - bash /entrypoint.sh
 
   links:
+    # node1 sends VLAN-tagged traffic toward the filtering switch.
     - endpoints:
         - node1:eth1
         - filter-switch:eth1
+
+    # Traffic that passes the XDP policy is bridged toward node2.
     - endpoints:
         - filter-switch:eth2
         - node2:eth1

@@ -2,6 +2,8 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Runtime tools used inside the Containerlab nodes for networking, testing,
+# XDP attachment, BPF map inspection, and VLAN/offload configuration.
 RUN apt-get update && apt-get install -y \
     iproute2 \
     iputils-ping \
@@ -16,4 +18,5 @@ RUN apt-get update && apt-get install -y \
 LABEL maintainer="xdp-vlan-policy-filter"
 LABEL description="Ubuntu 24.04 image for VLAN-aware eBPF/XDP packet filtering lab"
 
+# Keep the lab containers running so Containerlab can exec configuration scripts.
 CMD ["sleep", "infinity"]
