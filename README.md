@@ -144,20 +144,19 @@ flowchart LR
     RUNTIME -. optional cleanup .-> CLEANUP
 ```
 
-| Stage | Main file or script                            | Role                                                                                                             |
-| ----: | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-|     1 | `scripts/build-bpf.sh`                         | Builds the eBPF object from `src/vlan_filter.bpf.c` and generates `src/vmlinux.h` and `src/vlan_filter.bpf.o`.   |
-|     2 | `bpf-builder/Dockerfile`                       | Provides the build environment used for compiling the BPF program.                                               |
-|     3 | `Dockerfile`                                   | Defines the lab container image used by the Containerlab nodes.                                                  |
-|     4 | `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node topology: `node1`, `filter-switch`, and `node2`.                                          |
-|     5 | `containerlab/bin/entrypoint.sh`               | Configures VLAN interfaces, bridge ports, MTU, VLAN offload/reordering behavior, and bpffs inside the lab nodes. |
-|     6 | `containerlab/configs/*.cfg`                   | Provides per-node configuration for `node1`, `node2`, and `filter-switch`.                                       |
-|     7 | `scripts/deploy.sh`                            | Builds the Docker image and deploys the Containerlab topology.                                                   |
-|     8 | `scripts/attach-xdp.sh`                        | Loads `src/vlan_filter.bpf.o`, pins BPF maps, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
-|     9 | `scripts/test.sh`                              | Sends VLAN 100 and VLAN 200 test traffic from `node1` toward `node2`.                                            |
-|    10 | `scripts/show-stats.sh`                        | Reads pinned BPF maps and prints per-VLAN `seen/pass/drop` counters.                                             |
-|    11 | `scripts/build-image.sh`                       | Optional helper for building lab images manually. The validated workflow uses `deploy.sh`.                       |
-|    12 | `scripts/destroy.sh`                           | Destroys the Containerlab topology and removes the lab Docker image after testing.                               |
+| Stage | Main file or script | Role |
+|---:|---|---|
+| 1 | `scripts/build-bpf.sh` | Builds the eBPF object from `src/vlan_filter.bpf.c` and generates `src/vmlinux.h` and `src/vlan_filter.bpf.o`. |
+| 2 | `bpf-builder/Dockerfile` | Provides the build environment used for compiling the BPF program. |
+| 3 | `Dockerfile` | Defines the lab container image used by the Containerlab nodes. |
+| 4 | `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node topology: `node1`, `filter-switch`, and `node2`. |
+| 5 | `containerlab/bin/entrypoint.sh` | Configures VLAN interfaces, bridge ports, MTU, VLAN offload/reordering behavior, and bpffs inside the lab nodes. |
+| 6 | `containerlab/configs/*.cfg` | Provides per-node configuration for `node1`, `node2`, and `filter-switch`. |
+| 7 | `scripts/deploy.sh` | Builds the Docker image and deploys the Containerlab topology. |
+| 8 | `scripts/attach-xdp.sh` | Loads `src/vlan_filter.bpf.o`, pins BPF maps, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
+| 9 | `scripts/test.sh` | Sends VLAN 100 and VLAN 200 test traffic from `node1` toward `node2`. |
+| 10 | `scripts/show-stats.sh` | Reads pinned BPF maps and prints per-VLAN `seen/pass/drop` counters. |
+| 11 | `scripts/destroy.sh` | Destroys the Containerlab topology and removes the lab Docker image after testing. |
 
 During the functional test, the main packet path is:
 
@@ -221,7 +220,6 @@ Expected counter behavior after the tests:
 ├── scripts/
 │   ├── attach-xdp.sh
 │   ├── build-bpf.sh
-│   ├── build-image.sh
 │   ├── deploy.sh
 │   ├── destroy.sh
 │   ├── show-stats.sh
@@ -235,8 +233,11 @@ Expected counter behavior after the tests:
 |---|---|
 | `src/vlan_filter.bpf.c` | XDP/eBPF source code implementing the VLAN policy and counters. |
 | `src/Makefile` | Builds BPF object files from BPF C sources. |
+| `bpf-builder/Dockerfile` | Provides the Docker-based build environment for compiling the BPF object. |
+| `Dockerfile` | Defines the runtime image used by the Containerlab nodes. |
 | `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node lab topology. |
 | `containerlab/bin/entrypoint.sh` | Configures host VLAN interfaces, bridge ports, MTU, offload settings, and bpffs. |
+| `containerlab/configs/` | Contains per-node configuration files for `node1`, `node2`, and `filter-switch`. |
 | `scripts/` | Build, deploy, attach, test, stats, and cleanup helpers. |
 | `results/logs/` | Final validation evidence captured from VBox Ubuntu 24.04. |
 
@@ -257,12 +258,11 @@ Runtime scripts are intended for the Linux/VBox validation environment where Doc
 | Script | Purpose |
 |---|---|
 | `scripts/build-bpf.sh` | Builds BPF object files using the `bpf-builder` image and kernel BTF. |
-| `scripts/build-image.sh` | Optional helper for building lab images from named lab directories. |
 | `scripts/deploy.sh` | Builds the main Docker image and deploys the Containerlab topology. |
-| `scripts/destroy.sh` | Destroys the Containerlab topology and removes the lab image. |
 | `scripts/attach-xdp.sh` | Loads `vlan_filter.bpf.o`, pins maps, and attaches XDP to `eth1` and `eth2`. |
 | `scripts/test.sh` | Runs the functional test: VLAN 100 should pass and VLAN 200 should drop. |
 | `scripts/show-stats.sh` | Reads pinned BPF maps and prints per-VLAN counter totals. |
+| `scripts/destroy.sh` | Destroys the Containerlab topology and removes the lab image. |
 
 ## Architecture Overview
 
