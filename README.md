@@ -71,84 +71,64 @@ Step details:
 
 ## Execution Workflow
 
-The project is not driven by a single script only. It is a workflow where source files, build helpers, Containerlab assets, node configuration files, and validation scripts work together. The following diagram shows what each stage consumes, what it produces, and how the main repository components interact.
+The project is executed in stages. Each stage uses specific repository files and produces the next part of the lab workflow. The diagram below shows the main execution path and the most important files involved in each stage.
 
 ```mermaid
 flowchart LR
 
-    subgraph BUILD["1. Build BPF Object"]
-        SRC["src/vlan_filter.bpf.c<br/>src/Makefile"]
-        BPFBUILDER["bpf-builder/Dockerfile"]
+    subgraph BUILD["1. Build BPF object"]
+        SRC["src/vlan_filter.bpf.c"]
+        MAKE["src/Makefile"]
+        BUILDER["bpf-builder/Dockerfile"]
         BUILDBPF["scripts/build-bpf.sh"]
-        ARTIFACTS["Generated artifacts<br/>src/vmlinux.h<br/>src/vlan_filter.bpf.o"]
+        BPFOUT["Generated artifacts<br/>src/vmlinux.h<br/>src/vlan_filter.bpf.o"]
     end
 
     SRC --> BUILDBPF
-    BPFBUILDER --> BUILDBPF
-    BUILDBPF --> ARTIFACTS
+    MAKE --> BUILDBPF
+    BUILDER --> BUILDBPF
+    BUILDBPF --> BPFOUT
 
-    subgraph DEPLOY["2. Deploy Lab"]
-        DOCKERFILE["Dockerfile"]
-        TOPOLOGY["containerlab/xdp-vlan-policy-filter.clab.yml"]
-        ENTRYPOINT["containerlab/bin/entrypoint.sh"]
+    subgraph DEPLOY["2. Deploy lab"]
+        DOCKER["Dockerfile"]
+        TOPO["containerlab/xdp-vlan-policy-filter.clab.yml"]
+        ENTRY["containerlab/bin/entrypoint.sh"]
         CONFIGS["containerlab/configs/<br/>node1.cfg<br/>node2.cfg<br/>filter-switch.cfg"]
         DEPLOYSH["scripts/deploy.sh"]
-        IMAGE["Docker image<br/>xdp-vlan-policy-filter:latest"]
+        RUNTIME["Runtime topology<br/>node1 ↔ filter-switch ↔ node2"]
     end
 
-    DOCKERFILE --> DEPLOYSH
-    TOPOLOGY --> DEPLOYSH
-    ENTRYPOINT --> DEPLOYSH
+    DOCKER --> DEPLOYSH
+    TOPO --> DEPLOYSH
+    ENTRY --> DEPLOYSH
     CONFIGS --> DEPLOYSH
-    DEPLOYSH --> IMAGE
+    DEPLOYSH --> RUNTIME
 
-    subgraph RUNTIME["3. Runtime Topology"]
-        NODE1["node1<br/>eth1.100 / eth1.200"]
-        SWITCH["filter-switch<br/>eth1 -- br0 -- eth2"]
-        NODE2["node2<br/>eth1.100 / eth1.200"]
-    end
-
-    IMAGE --> NODE1
-    IMAGE --> SWITCH
-    IMAGE --> NODE2
-    ENTRYPOINT --> NODE1
-    ENTRYPOINT --> SWITCH
-    ENTRYPOINT --> NODE2
-    CONFIGS --> NODE1
-    CONFIGS --> SWITCH
-    CONFIGS --> NODE2
-
-    NODE1 <--> SWITCH
-    SWITCH <--> NODE2
-
-    subgraph ATTACH["4. Attach XDP"]
+    subgraph ATTACH["3. Attach XDP"]
         ATTACHSH["scripts/attach-xdp.sh"]
-        BPFOBJ["src/vlan_filter.bpf.o"]
         XDPPORTS["XDP attached on<br/>filter-switch eth1 and eth2"]
         MAPS["Pinned BPF maps<br/>seen_counter<br/>pass_counter<br/>drop_counter"]
     end
 
-    ARTIFACTS --> BPFOBJ
-    BPFOBJ --> ATTACHSH
-    SWITCH --> ATTACHSH
+    BPFOUT --> ATTACHSH
+    RUNTIME --> ATTACHSH
     ATTACHSH --> XDPPORTS
     ATTACHSH --> MAPS
 
-    subgraph VALIDATE["5. Validate Policy"]
+    subgraph TEST["4. Validate policy"]
         TESTSH["scripts/test.sh"]
         VLAN100["VLAN 100 traffic<br/>expected: pass"]
         VLAN200["VLAN 200 traffic<br/>expected: drop"]
     end
 
-    NODE1 --> TESTSH
-    NODE2 --> TESTSH
+    RUNTIME --> TESTSH
     XDPPORTS --> TESTSH
     TESTSH --> VLAN100
     TESTSH --> VLAN200
 
-    subgraph STATS["6. Read Counters and Evidence"]
+    subgraph STATS["5. Read counters and evidence"]
         SHOWSTATS["scripts/show-stats.sh"]
-        BPFT["bpftool<br/>net and map inspection"]
+        BPFT["bpftool net<br/>and map inspection"]
         COUNTERS["seen / pass / drop<br/>counter totals"]
         LOGS["results/logs/<br/>final-test.log<br/>final-stats.log<br/>final-bpftool-net.log"]
     end
@@ -160,24 +140,24 @@ flowchart LR
     SHOWSTATS --> LOGS
     BPFT --> LOGS
 
-    subgraph CLEANUP["7. Cleanup"]
-        DESTROY["scripts/destroy.sh"]
-        REMOVED["Destroy Containerlab topology<br/>Remove lab Docker image"]
-    end
-
-    DESTROY --> REMOVED
+    CLEANUP["scripts/destroy.sh<br/>cleanup lab and image"]
+    RUNTIME -. optional cleanup .-> CLEANUP
 ```
 
-| Stage | Main script or file              | Role                                                                                                             |
-| ----: | -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-|     1 | `scripts/build-bpf.sh`           | Builds the eBPF object from `src/vlan_filter.bpf.c` and generates the BPF build artifacts.                       |
-|     2 | `scripts/deploy.sh`              | Builds the Docker image and deploys the Containerlab topology.                                                   |
-|     3 | `containerlab/bin/entrypoint.sh` | Configures VLAN interfaces, bridge ports, MTU, VLAN offload/reordering behavior, and bpffs inside the lab nodes. |
-|     4 | `containerlab/configs/*.cfg`     | Provides per-node configuration for `node1`, `node2`, and `filter-switch`.                                       |
-|     5 | `scripts/attach-xdp.sh`          | Loads `src/vlan_filter.bpf.o`, pins BPF maps, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
-|     6 | `scripts/test.sh`                | Sends VLAN 100 and VLAN 200 test traffic from `node1` toward `node2`.                                            |
-|     7 | `scripts/show-stats.sh`          | Reads the pinned BPF maps and prints per-VLAN `seen/pass/drop` counters.                                         |
-|     8 | `scripts/destroy.sh`             | Destroys the Containerlab topology and removes the lab Docker image after testing.                               |
+| Stage | Main file or script                            | Role                                                                                                             |
+| ----: | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+|     1 | `scripts/build-bpf.sh`                         | Builds the eBPF object from `src/vlan_filter.bpf.c` and generates `src/vmlinux.h` and `src/vlan_filter.bpf.o`.   |
+|     2 | `bpf-builder/Dockerfile`                       | Provides the build environment used for compiling the BPF program.                                               |
+|     3 | `Dockerfile`                                   | Defines the lab container image used by the Containerlab nodes.                                                  |
+|     4 | `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node topology: `node1`, `filter-switch`, and `node2`.                                          |
+|     5 | `containerlab/bin/entrypoint.sh`               | Configures VLAN interfaces, bridge ports, MTU, VLAN offload/reordering behavior, and bpffs inside the lab nodes. |
+|     6 | `containerlab/configs/*.cfg`                   | Provides per-node configuration for `node1`, `node2`, and `filter-switch`.                                       |
+|     7 | `scripts/deploy.sh`                            | Builds the Docker image and deploys the Containerlab topology.                                                   |
+|     8 | `scripts/attach-xdp.sh`                        | Loads `src/vlan_filter.bpf.o`, pins BPF maps, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
+|     9 | `scripts/test.sh`                              | Sends VLAN 100 and VLAN 200 test traffic from `node1` toward `node2`.                                            |
+|    10 | `scripts/show-stats.sh`                        | Reads pinned BPF maps and prints per-VLAN `seen/pass/drop` counters.                                             |
+|    11 | `scripts/build-image.sh`                       | Optional helper for building lab images manually. The validated workflow uses `deploy.sh`.                       |
+|    12 | `scripts/destroy.sh`                           | Destroys the Containerlab topology and removes the lab Docker image after testing.                               |
 
 During the functional test, the main packet path is:
 
