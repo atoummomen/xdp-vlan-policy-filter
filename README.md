@@ -69,6 +69,73 @@ Step details:
 | `test.sh` | Sends VLAN 100 and VLAN 200 pings from `node1` to `node2`. | VLAN 100 succeeds; VLAN 200 fails. |
 | `show-stats.sh` | Reads BPF maps and prints counter totals. | VLAN counters match the expected pass/drop policy. |
 
+## Execution Workflow
+
+The project is executed in stages. Each script prepares one part of the lab lifecycle, from building the BPF object to validating the VLAN policy.
+
+```mermaid
+flowchart TD
+    A[build-bpf.sh] --> B[Generate BPF artifacts<br/>src/vmlinux.h<br/>src/vlan_filter.bpf.o]
+    B --> C[deploy.sh]
+    C --> D[Build Docker image<br/>Deploy Containerlab topology]
+    D --> E[attach-xdp.sh]
+    E --> F[Load XDP program with bpftool<br/>Pin BPF maps<br/>Attach XDP to eth1 and eth2]
+    F --> G[test.sh]
+    G --> H[Generate VLAN traffic from node1<br/>VLAN 100 should pass<br/>VLAN 200 should drop]
+    H --> I[show-stats.sh]
+    I --> J[Read BPF maps<br/>Print seen/pass/drop counters]
+```
+
+---
+
+### Workflow Summary
+
+| Step | Script | What Happens |
+|------|--------|--------------|
+| 1 | `build-bpf.sh` | Generates `src/vmlinux.h` and compiles `src/vlan_filter.bpf.c` into `src/vlan_filter.bpf.o`. |
+| 2 | `deploy.sh` | Builds the lab Docker image and deploys the Containerlab topology. |
+| 3 | `attach-xdp.sh` | Loads the BPF object, pins maps under `/sys/fs/bpf`, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
+| 4 | `test.sh` | Sends test traffic from `node1` to `node2` on VLAN 100 and VLAN 200. |
+| 5 | `show-stats.sh` | Reads the pinned BPF maps and prints per-VLAN seen/pass/drop counters. |
+| 6 | `destroy.sh` | Destroys the Containerlab topology and removes the lab Docker image when testing is finished. |
+
+---
+
+## Packet Processing Path
+
+During testing, the main packet path is:
+
+```text
+node1 VLAN subinterface
+        |
+        v
+node1 eth1
+        |
+        v
+filter-switch eth1
+        |
+        v
+XDP program checks VLAN ID
+        |
+        +--> VLAN 100: XDP_PASS -> br0 -> eth2 -> node2
+        |
+        +--> VLAN 200: XDP_DROP -> packet stops at filter-switch
+```
+
+---
+
+## Counter Behavior
+
+The counters are updated by the XDP program during packet processing.
+
+They do **not** decide the filtering policy.
+
+Their role is only to record what happened after packet classification:
+
+- **Seen counter** → packet with this VLAN ID was received
+- **Pass counter** → packet was allowed (`XDP_PASS`)
+- **Drop counter** → packet was blocked (`XDP_DROP`)
+
 ## Expected Results
 
 Expected ping behavior:
