@@ -28,6 +28,131 @@ The XDP program reads each packet before normal Linux bridge forwarding. It pars
 | Intermediate | Completed | Per-VLAN packet statistics using BPF maps. |
 | Advanced | Future work | Dynamic policy changes from user space are intentionally not implemented in this submission. |
 
+## Prerequisites
+
+The validated environment was VBox Ubuntu 24.04 with:
+
+| Requirement | Reason |
+|---|---|
+| Linux environment with BPF support | Required for XDP and BPF maps. |
+| Docker | Runs the lab containers and BPF build container. |
+| Containerlab | Creates the virtual topology. |
+| `bpftool` | Loads programs, pins maps, inspects XDP attachment, and reads counters. |
+| clang/LLVM or provided build helper | Compiles BPF C source into BPF object files. |
+| Privileged/container networking support | Required for interfaces, bridges, VLANs, and XDP attach. |
+
+WSL is suitable for editing and Git operations, but the runtime workflow should be executed in the Linux validation environment.
+
+## How to Run
+
+A clean checkout should first build the BPF object from the repository root in the VBox Ubuntu environment:
+
+```bash
+./scripts/build-bpf.sh
+```
+
+Then run the validated workflow:
+
+```bash
+./scripts/deploy.sh
+./scripts/attach-xdp.sh
+./scripts/test.sh
+./scripts/show-stats.sh
+```
+
+Step details:
+
+| Step | What it does | Success means |
+|---|---|---|
+| `deploy.sh` | Builds the lab image and starts the Containerlab topology. | `node1`, `filter-switch`, and `node2` are running. |
+| `attach-xdp.sh` | Loads the XDP program and attaches it to `filter-switch` `eth1` and `eth2`. | `bpftool net` shows XDP attached on both ports. |
+| `test.sh` | Sends VLAN 100 and VLAN 200 pings from `node1` to `node2`. | VLAN 100 succeeds; VLAN 200 fails. |
+| `show-stats.sh` | Reads BPF maps and prints counter totals. | VLAN counters match the expected pass/drop policy. |
+
+## Expected Results
+
+Expected ping behavior:
+
+| Test | Expected result |
+|---|---|
+| `ping -I eth1.100 10.100.0.2` | Succeeds. |
+| `ping -I eth1.200 10.200.0.2` | Fails because VLAN 200 is dropped. |
+
+Expected counter behavior after the tests:
+
+| Counter row | Expected behavior |
+|---|---|
+| VLAN 100 | `seen` and `pass` increase; `drop=0`. |
+| VLAN 200 | `seen` and `drop` increase; `pass=0`. |
+| Untagged | Counted separately under key `4096` and passed when present. |
+
+## Repository Structure
+
+```text
+.
+├── Dockerfile
+├── README.md
+├── bpf-builder/
+│   └── Dockerfile
+├── containerlab/
+│   ├── bin/
+│   │   └── entrypoint.sh
+│   ├── configs/
+│   │   ├── filter-switch.cfg
+│   │   ├── node1.cfg
+│   │   └── node2.cfg
+│   └── xdp-vlan-policy-filter.clab.yml
+├── results/
+│   └── logs/
+│       ├── final-bpftool-net.log
+│       ├── final-stats.log
+│       └── final-test.log
+├── scripts/
+│   ├── attach-xdp.sh
+│   ├── build-bpf.sh
+│   ├── build-image.sh
+│   ├── deploy.sh
+│   ├── destroy.sh
+│   ├── show-stats.sh
+│   └── test.sh
+└── src/
+    ├── Makefile
+    └── vlan_filter.bpf.c
+```
+
+| Path | Purpose |
+|---|---|
+| `src/vlan_filter.bpf.c` | XDP/eBPF source code implementing the VLAN policy and counters. |
+| `src/Makefile` | Builds BPF object files from BPF C sources. |
+| `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node lab topology. |
+| `containerlab/bin/entrypoint.sh` | Configures host VLAN interfaces, bridge ports, MTU, offload settings, and bpffs. |
+| `scripts/` | Build, deploy, attach, test, stats, and cleanup helpers. |
+| `results/logs/` | Final validation evidence captured from VBox Ubuntu 24.04. |
+
+Generated Containerlab runtime folders such as `containerlab/clab-*` are not part of the clean repository tree.
+
+## Build Artifacts
+
+Generated files such as `src/vlan_filter.bpf.o` and `src/vmlinux.h` may appear after running the BPF build step. They are ignored by Git and are not part of the clean source tree. If they are missing, regenerate them with:
+
+```bash
+./scripts/build-bpf.sh
+```
+
+## Scripts
+
+Runtime scripts are intended for the Linux/VBox validation environment where Docker, Containerlab, and kernel BPF support are available.
+
+| Script | Purpose |
+|---|---|
+| `scripts/build-bpf.sh` | Builds BPF object files using the `bpf-builder` image and kernel BTF. |
+| `scripts/build-image.sh` | Optional helper for building lab images from named lab directories. |
+| `scripts/deploy.sh` | Builds the main Docker image and deploys the Containerlab topology. |
+| `scripts/destroy.sh` | Destroys the Containerlab topology and removes the lab image. |
+| `scripts/attach-xdp.sh` | Loads `vlan_filter.bpf.o`, pins maps, and attaches XDP to `eth1` and `eth2`. |
+| `scripts/test.sh` | Runs the functional test: VLAN 100 should pass and VLAN 200 should drop. |
+| `scripts/show-stats.sh` | Reads pinned BPF maps and prints per-VLAN counter totals. |
+
 ## Architecture Overview
 
 The topology is intentionally small so the XDP behavior is easy to observe and reproduce. `node1` and `node2` generate test traffic on VLAN subinterfaces. `filter-switch` acts as the enforcement point and forwards traffic through a Linux bridge.
@@ -230,130 +355,7 @@ flowchart LR
     D --> R
 ```
 
-## Repository Structure
 
-```text
-.
-├── Dockerfile
-├── README.md
-├── bpf-builder/
-│   └── Dockerfile
-├── containerlab/
-│   ├── bin/
-│   │   └── entrypoint.sh
-│   ├── configs/
-│   │   ├── filter-switch.cfg
-│   │   ├── node1.cfg
-│   │   └── node2.cfg
-│   └── xdp-vlan-policy-filter.clab.yml
-├── results/
-│   └── logs/
-│       ├── final-bpftool-net.log
-│       ├── final-stats.log
-│       └── final-test.log
-├── scripts/
-│   ├── attach-xdp.sh
-│   ├── build-bpf.sh
-│   ├── build-image.sh
-│   ├── deploy.sh
-│   ├── destroy.sh
-│   ├── show-stats.sh
-│   └── test.sh
-└── src/
-    ├── Makefile
-    └── vlan_filter.bpf.c
-```
-
-| Path | Purpose |
-|---|---|
-| `src/vlan_filter.bpf.c` | XDP/eBPF source code implementing the VLAN policy and counters. |
-| `src/Makefile` | Builds BPF object files from BPF C sources. |
-| `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node lab topology. |
-| `containerlab/bin/entrypoint.sh` | Configures host VLAN interfaces, bridge ports, MTU, offload settings, and bpffs. |
-| `scripts/` | Build, deploy, attach, test, stats, and cleanup helpers. |
-| `results/logs/` | Final validation evidence captured from VBox Ubuntu 24.04. |
-
-Generated Containerlab runtime folders such as `containerlab/clab-*` are not part of the clean repository tree.
-
-## Build Artifacts
-
-Generated files such as `src/vlan_filter.bpf.o` and `src/vmlinux.h` may appear after running the BPF build step. They are ignored by Git and are not part of the clean source tree. If they are missing, regenerate them with:
-
-```bash
-./scripts/build-bpf.sh
-```
-
-## Scripts
-
-Runtime scripts are intended for the Linux/VBox validation environment where Docker, Containerlab, and kernel BPF support are available.
-
-| Script | Purpose |
-|---|---|
-| `scripts/build-bpf.sh` | Builds BPF object files using the `bpf-builder` image and kernel BTF. |
-| `scripts/build-image.sh` | Optional helper for building lab images from named lab directories. |
-| `scripts/deploy.sh` | Builds the main Docker image and deploys the Containerlab topology. |
-| `scripts/destroy.sh` | Destroys the Containerlab topology and removes the lab image. |
-| `scripts/attach-xdp.sh` | Loads `vlan_filter.bpf.o`, pins maps, and attaches XDP to `eth1` and `eth2`. |
-| `scripts/test.sh` | Runs the functional test: VLAN 100 should pass and VLAN 200 should drop. |
-| `scripts/show-stats.sh` | Reads pinned BPF maps and prints per-VLAN counter totals. |
-
-## Prerequisites
-
-The validated environment was VBox Ubuntu 24.04 with:
-
-| Requirement | Reason |
-|---|---|
-| Linux environment with BPF support | Required for XDP and BPF maps. |
-| Docker | Runs the lab containers and BPF build container. |
-| Containerlab | Creates the virtual topology. |
-| `bpftool` | Loads programs, pins maps, inspects XDP attachment, and reads counters. |
-| clang/LLVM or provided build helper | Compiles BPF C source into BPF object files. |
-| Privileged/container networking support | Required for interfaces, bridges, VLANs, and XDP attach. |
-
-WSL is suitable for editing and Git operations, but the runtime workflow should be executed in the Linux validation environment.
-
-## How to Run
-
-A clean checkout should first build the BPF object from the repository root in the VBox Ubuntu environment:
-
-```bash
-./scripts/build-bpf.sh
-```
-
-Then run the validated workflow:
-
-```bash
-./scripts/deploy.sh
-./scripts/attach-xdp.sh
-./scripts/test.sh
-./scripts/show-stats.sh
-```
-
-Step details:
-
-| Step | What it does | Success means |
-|---|---|---|
-| `deploy.sh` | Builds the lab image and starts the Containerlab topology. | `node1`, `filter-switch`, and `node2` are running. |
-| `attach-xdp.sh` | Loads the XDP program and attaches it to `filter-switch` `eth1` and `eth2`. | `bpftool net` shows XDP attached on both ports. |
-| `test.sh` | Sends VLAN 100 and VLAN 200 pings from `node1` to `node2`. | VLAN 100 succeeds; VLAN 200 fails. |
-| `show-stats.sh` | Reads BPF maps and prints counter totals. | VLAN counters match the expected pass/drop policy. |
-
-## Expected Results
-
-Expected ping behavior:
-
-| Test | Expected result |
-|---|---|
-| `ping -I eth1.100 10.100.0.2` | Succeeds. |
-| `ping -I eth1.200 10.200.0.2` | Fails because VLAN 200 is dropped. |
-
-Expected counter behavior after the tests:
-
-| Counter row | Expected behavior |
-|---|---|
-| VLAN 100 | `seen` and `pass` increase; `drop=0`. |
-| VLAN 200 | `seen` and `drop` increase; `pass=0`. |
-| Untagged | Counted separately under key `4096` and passed when present. |
 
 ## Final Validation Evidence
 
