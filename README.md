@@ -43,19 +43,19 @@ Level 3 adds dynamic mode, where user space can block or allow VLANs through a p
 
 ## Topology
 
-```text
-+------------------+        +---------------------------+        +------------------+
-|      node1       |        |       filter-switch       |        |      node2       |
-|                  |        |                           |        |                  |
-| eth1.100         |        | eth1 -- br0 -- eth2       |        | eth1.100         |
-| 10.100.0.1/24    |<------>| XDP          XDP          |<------>| 10.100.0.2/24    |
-|                  |        |                           |        |                  |
-| eth1.200         |        | VLAN bridge/enforcement   |        | eth1.200         |
-| 10.200.0.1/24    |<------>|                           |<------>| 10.200.0.2/24    |
-+------------------+        +---------------------------+        +------------------+
+The lab uses a simple three-node topology. `node1` and `node2` generate VLAN-tagged traffic, while `filter-switch` acts as the bridge and XDP enforcement point.
+
+```mermaid
+flowchart LR
+    N1["node1<br/>eth1.100: 10.100.0.1/24<br/>eth1.200: 10.200.0.1/24"]
+    FS["filter-switch<br/>eth1 → br0 → eth2<br/>XDP attached on eth1 and eth2"]
+    N2["node2<br/>eth1.100: 10.100.0.2/24<br/>eth1.200: 10.200.0.2/24"]
+
+    N1 <-->|"VLAN 100 / VLAN 200"| FS
+    FS <-->|"VLAN 100 / VLAN 200"| N2
 ```
 
-`node1` and `node2` generate VLAN-tagged traffic using VLAN subinterfaces. `filter-switch` bridges the two links. XDP is attached on both `filter-switch:eth1` and `filter-switch:eth2`, so filtering is symmetric regardless of traffic direction.
+`filter-switch` is the enforcement point. XDP is attached to both bridge-facing interfaces, so packets are checked before normal Linux bridge forwarding and the policy is applied in both directions.
 
 ## Modes
 
