@@ -9,19 +9,22 @@ set -euo pipefail
 # total for each VLAN key.
 
 FILTER_SWITCH="${FILTER_SWITCH:-clab-xdp-vlan-policy-filter-filter-switch}"
+BPF_MAP_DIR="${BPF_MAP_DIR:-/sys/fs/bpf}"
 
 echo "=== XDP VLAN filter counters on ${FILTER_SWITCH} ==="
 
 # docker exec -i keeps stdin open so the heredoc script below is executed inside
 # the filter-switch container.
-docker exec -i "${FILTER_SWITCH}" bash -s <<'EOF'
+docker exec -i "${FILTER_SWITCH}" env BPF_MAP_DIR="${BPF_MAP_DIR}" bash -s <<'EOF'
 set -euo pipefail
+
+BPF_MAP_DIR="${BPF_MAP_DIR:-/sys/fs/bpf}"
 
 lookup_total() {
     local map="$1"
     local key_hex="$2"
 
-    if [[ ! -e "/sys/fs/bpf/${map}" ]]; then
+    if [[ ! -e "${BPF_MAP_DIR}/${map}" ]]; then
         echo "missing"
         return
     fi
@@ -38,7 +41,7 @@ lookup_total() {
     #   .formatted.values[].value
     #
     # jq sums those values to produce one total counter.
-    bpftool -j map lookup pinned "/sys/fs/bpf/${map}" key hex ${key_hex} 2>/dev/null \
+    bpftool -j map lookup pinned "${BPF_MAP_DIR}/${map}" key hex ${key_hex} 2>/dev/null \
         | jq '[.formatted.values[].value] | add // 0'
 }
 
