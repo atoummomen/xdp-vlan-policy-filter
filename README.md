@@ -1,298 +1,43 @@
-# XDP/eBPF VLAN Tag Filter
+# XDP/eBPF VLAN Policy Filter
 
-This repository contains a Containerlab-based networking project that implements an XDP/eBPF VLAN tag filter. The filter runs on a Linux `filter-switch` node, inspects Ethernet frames at XDP hook points, allows VLAN 100, drops VLAN 200 and other tagged VLANs, passes untagged traffic, and records packet counters in BPF maps.
+## Overview
 
-The project was validated in a VBox Ubuntu 24.04 environment. WSL is used only for editing, Git, cleanup, and documentation.
+This repository is a Containerlab-based networking lab that demonstrates VLAN policy enforcement with XDP/eBPF. The lab uses three Linux containers: `node1`, `filter-switch`, and `node2`. The middle `filter-switch` node bridges the two host links and runs XDP on both bridge-facing interfaces.
 
-## Project Overview
+The project demonstrates three practical eBPF capabilities: static VLAN filtering, per-VLAN BPF counters, and runtime policy control from user space. It includes a stable baseline mode and a dynamic policy mode. In dynamic mode, VLAN pass/drop behavior is changed through a pinned BPF map without rebuilding the BPF program and without reattaching XDP.
 
-The lab uses three Linux containers connected with Containerlab: `node1`, `filter-switch`, and `node2`. The two end hosts have VLAN subinterfaces for VLAN 100 and VLAN 200. The middle node bridges the two links and runs the XDP program on both bridge-facing interfaces, `eth1` and `eth2`.
+The main goal is to show how an XDP data-plane program can stay loaded while user space changes VLAN policy through BPF maps.
 
-The XDP program reads each packet before normal Linux bridge forwarding. It parses the Ethernet header, detects 802.1Q or 802.1AD VLAN tags, extracts the VLAN ID, applies a static policy, and updates per-VLAN counters. This provides both packet filtering and visibility into how many packets were seen, passed, or dropped.
+## Environment
 
-## Key Results
+The lab was validated on VBox Ubuntu 24.04. WSL is useful for editing, Git, and documentation, but runtime validation should be done in a real Linux environment with BPF/XDP support.
 
-| Requirement | Result |
+| Requirement | Purpose |
 |---|---|
-| VLAN 100 forwarding | Passed |
-| VLAN 200 filtering | Dropped |
-| Untagged traffic | Passed |
-| Per-VLAN counters | Working |
-| XDP attachment | Verified on `filter-switch:eth1` and `filter-switch:eth2` |
+| Linux with BPF/XDP support | Runtime environment |
+| Docker | Lab containers |
+| Containerlab | Topology creation |
+| `bpftool` | Load programs, inspect maps, read counters |
+| clang/LLVM or build helper | Compile BPF objects |
+| Privileged/container networking support | Interfaces, VLANs, bridges, and XDP attach |
 
-## Implemented Requirements
+The scripts assume the runtime environment can create network namespaces, Linux bridges, VLAN interfaces, and pinned BPF objects under `/sys/fs/bpf`.
 
-| Level | Status | Description |
-|---|---:|---|
-| Basic | Completed | Static VLAN filtering with VLAN 100 allowed and VLAN 200 dropped. |
-| Intermediate | Completed | Per-VLAN packet statistics using BPF maps. |
-| Advanced | Future work | Dynamic policy changes from user space are intentionally not implemented in this submission. |
+## Project Levels
 
-## Prerequisites
-
-The validated environment was VBox Ubuntu 24.04 with:
-
-| Requirement | Reason |
-|---|---|
-| Linux environment with BPF support | Required for XDP and BPF maps. |
-| Docker | Runs the lab containers and BPF build container. |
-| Containerlab | Creates the virtual topology. |
-| `bpftool` | Loads programs, pins maps, inspects XDP attachment, and reads counters. |
-| clang/LLVM or provided build helper | Compiles BPF C source into BPF object files. |
-| Privileged/container networking support | Required for interfaces, bridges, VLANs, and XDP attach. |
-
-WSL is suitable for editing and Git operations, but the runtime workflow should be executed in the Linux validation environment.
-
-## How to Run
-
-A clean checkout should first build the BPF object from the repository root in the VBox Ubuntu environment:
-
-```bash
-./scripts/build-bpf.sh
-```
-
-Then run the validated workflow:
-
-```bash
-./scripts/deploy.sh
-./scripts/attach-xdp.sh
-./scripts/test.sh
-./scripts/show-stats.sh
-```
-
-Step details:
-
-| Step | What it does | Success means |
+| Level | Feature | Status |
 |---|---|---|
-| `deploy.sh` | Builds the lab image and starts the Containerlab topology. | `node1`, `filter-switch`, and `node2` are running. |
-| `attach-xdp.sh` | Loads the XDP program and attaches it to `filter-switch` `eth1` and `eth2`. | `bpftool net` shows XDP attached on both ports. |
-| `test.sh` | Sends VLAN 100 and VLAN 200 pings from `node1` to `node2`. | VLAN 100 succeeds; VLAN 200 fails. |
-| `show-stats.sh` | Reads BPF maps and prints counter totals. | VLAN counters match the expected pass/drop policy. |
+| Level 1 | Static XDP VLAN filtering | Implemented |
+| Level 2 | Per-VLAN BPF counters | Implemented |
+| Level 3 | Runtime user-space VLAN policy control | Implemented |
 
-## Execution Workflow
+Level 1 is the baseline static mode: VLAN 100 passes, VLAN 200 drops, other tagged VLANs drop, and untagged traffic passes.
 
-The project is executed in stages. Each stage uses specific repository files and produces the next part of the lab workflow. The diagram below shows the main execution path and the most important files involved in each stage.
+Level 2 adds BPF counters that track packets seen, passed, and dropped per VLAN key.
 
-```mermaid
-flowchart LR
+Level 3 adds dynamic mode, where user space can block or allow VLANs through a pinned BPF hash map without rebuilding the program and without reattaching XDP.
 
-    subgraph BUILD["1. Build BPF object"]
-        SRC["src/vlan_filter.bpf.c"]
-        MAKE["src/Makefile"]
-        BUILDER["bpf-builder/Dockerfile"]
-        BUILDBPF["scripts/build-bpf.sh"]
-        BPFOUT["Generated artifacts<br/>src/vmlinux.h<br/>src/vlan_filter.bpf.o"]
-    end
-
-    SRC --> BUILDBPF
-    MAKE --> BUILDBPF
-    BUILDER --> BUILDBPF
-    BUILDBPF --> BPFOUT
-
-    subgraph DEPLOY["2. Deploy lab"]
-        DOCKER["Dockerfile"]
-        TOPO["containerlab/xdp-vlan-policy-filter.clab.yml"]
-        ENTRY["containerlab/bin/entrypoint.sh"]
-        CONFIGS["containerlab/configs/<br/>node1.cfg<br/>node2.cfg<br/>filter-switch.cfg"]
-        DEPLOYSH["scripts/deploy.sh"]
-        RUNTIME["Runtime topology<br/>node1 ↔ filter-switch ↔ node2"]
-    end
-
-    DOCKER --> DEPLOYSH
-    TOPO --> DEPLOYSH
-    ENTRY --> DEPLOYSH
-    CONFIGS --> DEPLOYSH
-    DEPLOYSH --> RUNTIME
-
-    subgraph ATTACH["3. Attach XDP"]
-        ATTACHSH["scripts/attach-xdp.sh"]
-        XDPPORTS["XDP attached on<br/>filter-switch eth1 and eth2"]
-        MAPS["Pinned BPF maps<br/>seen_counter<br/>pass_counter<br/>drop_counter"]
-    end
-
-    BPFOUT --> ATTACHSH
-    RUNTIME --> ATTACHSH
-    ATTACHSH --> XDPPORTS
-    ATTACHSH --> MAPS
-
-    subgraph TEST["4. Validate policy"]
-        TESTSH["scripts/test.sh"]
-        VLAN100["VLAN 100 traffic<br/>expected: pass"]
-        VLAN200["VLAN 200 traffic<br/>expected: drop"]
-    end
-
-    RUNTIME --> TESTSH
-    XDPPORTS --> TESTSH
-    TESTSH --> VLAN100
-    TESTSH --> VLAN200
-
-    subgraph STATS["5. Read counters and evidence"]
-        SHOWSTATS["scripts/show-stats.sh"]
-        BPFT["bpftool net<br/>and map inspection"]
-        COUNTERS["seen / pass / drop<br/>counter totals"]
-        LOGS["results/logs/<br/>final-test.log<br/>final-stats.log<br/>final-bpftool-net.log"]
-    end
-
-    MAPS --> SHOWSTATS
-    XDPPORTS --> BPFT
-    SHOWSTATS --> COUNTERS
-    TESTSH --> LOGS
-    SHOWSTATS --> LOGS
-    BPFT --> LOGS
-
-    CLEANUP["scripts/destroy.sh<br/>cleanup lab and image"]
-    RUNTIME -. optional cleanup .-> CLEANUP
-```
-
-| Stage | Main file or script | Role |
-|---:|---|---|
-| 1 | `scripts/build-bpf.sh` | Builds the eBPF object from `src/vlan_filter.bpf.c` and generates `src/vmlinux.h` and `src/vlan_filter.bpf.o`. |
-| 2 | `bpf-builder/Dockerfile` | Provides the build environment used for compiling the BPF program. |
-| 3 | `Dockerfile` | Defines the lab container image used by the Containerlab nodes. |
-| 4 | `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node topology: `node1`, `filter-switch`, and `node2`. |
-| 5 | `containerlab/bin/entrypoint.sh` | Configures VLAN interfaces, bridge ports, MTU, VLAN offload/reordering behavior, and bpffs inside the lab nodes. |
-| 6 | `containerlab/configs/*.cfg` | Provides per-node configuration for `node1`, `node2`, and `filter-switch`. |
-| 7 | `scripts/deploy.sh` | Builds the Docker image and deploys the Containerlab topology. |
-| 8 | `scripts/attach-xdp.sh` | Loads `src/vlan_filter.bpf.o`, pins BPF maps, and attaches XDP to `filter-switch:eth1` and `filter-switch:eth2`. |
-| 9 | `scripts/test.sh` | Sends VLAN 100 and VLAN 200 test traffic from `node1` toward `node2`. |
-| 10 | `scripts/show-stats.sh` | Reads pinned BPF maps and prints per-VLAN `seen/pass/drop` counters. |
-| 11 | `scripts/destroy.sh` | Destroys the Containerlab topology and removes the lab Docker image after testing. |
-
-During the functional test, the main packet path is:
-
-```text
-node1 VLAN subinterface
-        |
-        v
-node1 eth1
-        |
-        v
-filter-switch eth1
-        |
-        v
-XDP program checks the VLAN ID
-        |
-        +--> VLAN 100: XDP_PASS -> br0 -> eth2 -> node2
-        |
-        +--> VLAN 200: XDP_DROP -> packet stops at filter-switch
-```
-
-The counters are updated by the XDP program during packet processing. They do not decide the policy; they record what happened after the packet was classified.
-
-## Expected Results
-
-Expected ping behavior:
-
-| Test | Expected result |
-|---|---|
-| `ping -I eth1.100 10.100.0.2` | Succeeds. |
-| `ping -I eth1.200 10.200.0.2` | Fails because VLAN 200 is dropped. |
-
-Expected counter behavior after the tests:
-
-| Counter row | Expected behavior |
-|---|---|
-| VLAN 100 | `seen` and `pass` increase; `drop=0`. |
-| VLAN 200 | `seen` and `drop` increase; `pass=0`. |
-| Untagged | Counted separately under key `4096` and passed when present. |
-
-## Repository Structure
-
-```text
-.
-├── Dockerfile
-├── README.md
-├── bpf-builder/
-│   └── Dockerfile
-├── containerlab/
-│   ├── bin/
-│   │   └── entrypoint.sh
-│   ├── configs/
-│   │   ├── filter-switch.cfg
-│   │   ├── node1.cfg
-│   │   └── node2.cfg
-│   └── xdp-vlan-policy-filter.clab.yml
-├── results/
-│   └── logs/
-│       ├── final-bpftool-net.log
-│       ├── final-stats.log
-│       └── final-test.log
-├── scripts/
-│   ├── attach-xdp.sh
-│   ├── build-bpf.sh
-│   ├── deploy.sh
-│   ├── destroy.sh
-│   ├── show-stats.sh
-│   └── test.sh
-└── src/
-    ├── Makefile
-    └── vlan_filter.bpf.c
-```
-
-| Path | Purpose |
-|---|---|
-| `src/vlan_filter.bpf.c` | XDP/eBPF source code implementing the VLAN policy and counters. |
-| `src/Makefile` | Builds BPF object files from BPF C sources. |
-| `bpf-builder/Dockerfile` | Provides the Docker-based build environment for compiling the BPF object. |
-| `Dockerfile` | Defines the runtime image used by the Containerlab nodes. |
-| `containerlab/xdp-vlan-policy-filter.clab.yml` | Defines the three-node lab topology. |
-| `containerlab/bin/entrypoint.sh` | Configures host VLAN interfaces, bridge ports, MTU, offload settings, and bpffs. |
-| `containerlab/configs/` | Contains per-node configuration files for `node1`, `node2`, and `filter-switch`. |
-| `scripts/` | Build, deploy, attach, test, stats, and cleanup helpers. |
-| `results/logs/` | Final validation evidence captured from VBox Ubuntu 24.04. |
-
-Generated Containerlab runtime folders such as `containerlab/clab-*` are not part of the clean repository tree.
-
-## Build Artifacts
-
-Generated files such as `src/vlan_filter.bpf.o` and `src/vmlinux.h` may appear after running the BPF build step. They are ignored by Git and are not part of the clean source tree. If they are missing, regenerate them with:
-
-```bash
-./scripts/build-bpf.sh
-```
-
-## Scripts
-
-Runtime scripts are intended for the Linux/VBox validation environment where Docker, Containerlab, and kernel BPF support are available.
-
-| Script | Purpose |
-|---|---|
-| `scripts/build-bpf.sh` | Builds BPF object files using the `bpf-builder` image and kernel BTF. |
-| `scripts/deploy.sh` | Builds the main Docker image and deploys the Containerlab topology. |
-| `scripts/attach-xdp.sh` | Loads `vlan_filter.bpf.o`, pins maps, and attaches XDP to `eth1` and `eth2`. |
-| `scripts/test.sh` | Runs the functional test: VLAN 100 should pass and VLAN 200 should drop. |
-| `scripts/show-stats.sh` | Reads pinned BPF maps and prints per-VLAN counter totals. |
-| `scripts/destroy.sh` | Destroys the Containerlab topology and removes the lab image. |
-
-## Architecture Overview
-
-The topology is intentionally small so the XDP behavior is easy to observe and reproduce. `node1` and `node2` generate test traffic on VLAN subinterfaces. `filter-switch` acts as the enforcement point and forwards traffic through a Linux bridge.
-
-XDP is attached to both `filter-switch` interfaces connected to the end hosts:
-
-| Interface            | Purpose                        |
-| -------------------- | ------------------------------ |
-| `filter-switch:eth1` | Receives traffic from `node1`. |
-| `filter-switch:eth2` | Receives traffic from `node2`. |
-
-Attaching to both ports makes filtering symmetric. Traffic is checked regardless of direction before it is forwarded by the bridge. This is important because a bridge can carry frames in both directions, and a policy should not depend on which host initiated the packet.
-
-## Design Decisions
-
-| Decision                                           | Reason                                                                                         |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Attach XDP on `filter-switch` instead of end hosts | The middle node is the enforcement point, so packets can be filtered before bridge forwarding. |
-| Attach XDP on both `eth1` and `eth2`               | Filtering is symmetric and does not depend on traffic direction.                               |
-| Use an allowlist policy                            | Only VLAN 100 is allowed; unexpected tagged VLANs are dropped.                                 |
-| Use per-CPU array maps                             | Counter updates are efficient in the XDP fast path and avoid unnecessary contention.           |
-| Use key `4096` for untagged traffic                | Valid VLAN IDs are 0–4095, so 4096 is a clean separate key for untagged frames.                |
-
-
-## Network Topology
-
-Text overview:
-
-The lab uses a three-node linear topology: `node1 <-> filter-switch <-> node2`. The two end hosts generate VLAN-tagged traffic using VLAN subinterfaces. The middle node acts as a Linux bridge and enforcement point. The XDP program is attached to both bridge-facing interfaces on `filter-switch`, so packets are inspected before normal bridge forwarding.
+## Topology
 
 ```text
 +------------------+        +---------------------------+        +------------------+
@@ -304,244 +49,280 @@ The lab uses a three-node linear topology: `node1 <-> filter-switch <-> node2`. 
 | eth1.200         |        | VLAN bridge/enforcement   |        | eth1.200         |
 | 10.200.0.1/24    |<------>|                           |<------>| 10.200.0.2/24    |
 +------------------+        +---------------------------+        +------------------+
-
-VLAN 100: allowed
-VLAN 200: dropped
 ```
 
-The diagram below shows the same topology with the VLAN subinterfaces and the XDP attachment points.
+`node1` and `node2` generate VLAN-tagged traffic using VLAN subinterfaces. `filter-switch` is the enforcement point. XDP is attached to both `eth1` and `eth2`, so filtering is symmetric regardless of traffic direction.
 
-```mermaid
-flowchart LR
-    subgraph N1[node1]
-        N1E[eth1]
-        N1100[eth1.100<br/>10.100.0.1/24]
-        N1200[eth1.200<br/>10.200.0.1/24]
-    end
+## Modes
 
-    subgraph FS[filter-switch]
-        F1[eth1<br/>XDP attached]
-        BR[br0<br/>Linux bridge]
-        F2[eth2<br/>XDP attached]
-    end
+| Mode | BPF program | Attach script | Policy |
+|---|---|---|---|
+| Baseline static | `src/vlan_filter.bpf.c` | `scripts/attach-xdp.sh` | VLAN 100 passes; VLAN 200 and other tagged VLANs drop. |
+| Dynamic policy | `src/vlan_filter_dynamic.bpf.c` | `scripts/attach-xdp-dynamic.sh` | Missing key passes; `0` drops; `1` passes. |
 
-    subgraph N2[node2]
-        N2E[eth1]
-        N2100[eth1.100<br/>10.100.0.2/24]
-        N2200[eth1.200<br/>10.200.0.2/24]
-    end
+Only one XDP program is attached to an interface at a time. Running an attach script switches the lab to that mode.
 
-    N1100 -. VLAN 100 .- N1E
-    N1200 -. VLAN 200 .- N1E
-    N1E <--> F1
-    F1 <--> BR
-    BR <--> F2
-    F2 <--> N2E
-    N2E -. VLAN 100 .- N2100
-    N2E -. VLAN 200 .- N2200
+Example:
+
+```bash
+./scripts/vlan-policy.sh block 400
 ```
 
+This updates the live dynamic policy map while the XDP program remains attached.
 
-## VLAN Policy
+## Quick Start
 
-The policy is static in the submitted implementation. It is implemented in `src/vlan_filter.bpf.c`.
+Run commands from the repository root in the Linux validation environment.
 
-| Packet Type | Action | Reason |
-|---|---:|---|
-| Untagged Ethernet frame | `XDP_PASS` | Non-VLAN traffic is not blocked by this project policy. |
-| VLAN 100 | `XDP_PASS` | VLAN 100 is the allowed VLAN. |
-| VLAN 200 | `XDP_DROP` | VLAN 200 is the denied VLAN used for testing. |
-| Other tagged VLANs | `XDP_DROP` | Only VLAN 100 is explicitly allowed. |
+### 1. Build BPF Programs
 
-This allowlist-style policy is safer than only blocking VLAN 200 because any unexpected tagged VLAN is dropped unless it is VLAN 100.
+```bash
+make -C src
+```
 
-## Packet Representation and XDP Hook Point
-
-Ethernet diagrams are useful for understanding the logical structure of a frame, but the kernel does not handle the packet as a drawn table. At runtime, the packet is represented as a contiguous buffer of bytes in memory. The XDP program receives access to this packet buffer through the `xdp_md` context, mainly using the `data` and `data_end` pointers.
-
-The eBPF program must therefore interpret the packet memory manually and safely. It first treats the beginning of the packet buffer as an Ethernet header, then checks whether enough bytes are available before reading more fields. These bounds checks are required because the BPF verifier must prove that the program never reads outside the packet buffer.
-
-For the logic implemented in this project, the relevant untagged Ethernet layout is:
+This builds both BPF objects:
 
 ```text
-+------------------+----------------+-----------+---------+
-| Destination MAC  | Source MAC     | EtherType | Payload |
-| 6 bytes          | 6 bytes        | 2 bytes   | ...     |
-+------------------+----------------+-----------+---------+
+src/vlan_filter.bpf.o
+src/vlan_filter_dynamic.bpf.o
 ```
 
-When an 802.1Q VLAN tag is present, the tag is inserted after the source MAC address. The field that normally identifies the payload protocol becomes the VLAN TPID, usually `0x8100`. The VLAN information is then carried in the following VLAN TCI field, and the real payload protocol is stored in the inner EtherType field.
+### 2. Deploy Lab
+
+```bash
+./scripts/deploy.sh
+```
+
+This builds the lab image and deploys the three-node Containerlab topology.
+
+### 3. Run Baseline Mode
+
+```bash
+./scripts/attach-xdp.sh
+./scripts/test.sh
+./scripts/show-stats.sh
+```
+
+Expected result:
 
 ```text
-+------------------+----------------+-----------+----------+----------------+---------+
-| Destination MAC  | Source MAC     | VLAN TPID | VLAN TCI | Inner EtherType| Payload |
-| 6 bytes          | 6 bytes        | 2 bytes   | 2 bytes  | 2 bytes        | ...     |
-|                  |                | 0x8100    | VID bits | IPv4/ARP/etc.  |         |
-+------------------+----------------+-----------+----------+----------------+---------+
+VLAN 100 passes
+VLAN 200 drops
+Counters show VLAN 100 pass traffic and VLAN 200 drop traffic
 ```
 
-The VLAN ID is stored in the lower 12 bits of the VLAN TCI field. In this project, the XDP program extracts this VLAN ID and then applies the static policy: VLAN 100 is passed, VLAN 200 and other tagged VLANs are dropped, and untagged traffic is passed.
+### 4. Run Dynamic Mode
 
-The counters do not make the forwarding decision. The XDP program makes the decision, and the counters record what happened. `seen_counter` records that a packet was classified under a VLAN or untagged key, while `pass_counter` and `drop_counter` record the final action.
+```bash
+./scripts/attach-xdp-dynamic.sh
+./scripts/validate-dynamic-policy.sh
+```
 
-Physical-layer fields such as the preamble, start frame delimiter, frame check sequence, and interpacket gap are not part of the packet fields used by this XDP program. The implementation focuses on the Ethernet header and optional VLAN header visible in the packet buffer.
-
-## Layer Scope
-
-The validation traffic in this project uses IPv4 addresses on VLAN subinterfaces because IPv4 `ping` provides a simple and clear functional test. However, the XDP filter itself is not an IPv4 firewall and does not make decisions based on the IPv4 header.
-
-The filtering decision is made at Layer 2 by inspecting the Ethernet header and the optional VLAN tag. This happens before the payload protocol is considered. Therefore, the same VLAN policy applies regardless of whether the payload is IPv4, IPv6, ARP, or another Ethernet payload.
-
-In other words, the implemented policy is VLAN-based, not IP-version-based:
+Expected result:
 
 ```text
-Ethernet frame -> optional VLAN tag -> VLAN ID -> XDP_PASS or XDP_DROP
+VLAN 200 starts blocked
+VLAN 200 can be changed to pass from user space
+VLAN 200 can be changed back to block
+The dynamic XDP program stays attached during policy changes
 ```
 
-For example, an IPv6 packet carried inside VLAN 200 would still be dropped because the denied condition is the VLAN ID, not the IP version.
+### 5. Manual Policy Control
 
+```bash
+./scripts/vlan-policy.sh block 400
+./scripts/vlan-policy.sh pass 400
+./scripts/vlan-policy.sh show 400
+./scripts/vlan-policy.sh list blocked
+./scripts/vlan-policy.sh list all
+```
 
-## XDP/eBPF Packet Flow
+Aliases are also supported:
 
-The XDP program starts by validating that the Ethernet header is present in the packet data. It then reads the EtherType. If the packet is not VLAN-tagged, it is counted under the untagged key and passed.
+```text
+drop  = block
+allow = pass
+```
 
-For tagged packets, the program recognizes VLAN EtherTypes `0x8100` for 802.1Q and `0x88a8` for 802.1AD. It safely reads the VLAN header, extracts the VLAN ID using the lower 12 bits of the VLAN TCI field, updates the `seen_counter`, and then applies the policy.
+## How It Works
+
+The XDP program receives each packet through the `xdp_md` context before normal Linux bridge forwarding. It reads the Ethernet header only after verifier-safe bounds checks.
+
+If the EtherType is `0x8100` for 802.1Q or `0x88a8` for 802.1AD, the program reads the VLAN header and extracts the VLAN ID from the lower 12 bits of the VLAN TCI field.
+
+Untagged traffic is counted under key `4096`, which is outside the valid VLAN ID range `0..4095`, and is passed. Tagged traffic is counted under its VLAN ID.
+
+Baseline mode applies a static allowlist policy. Dynamic mode looks up the VLAN ID in `vlan_policy` and applies the user-space controlled policy. The counters record the final decision; they do not make the policy decision.
 
 ```mermaid
 flowchart TD
-    A[Packet arrives on filter-switch eth1 or eth2] --> B{Ethernet header present?}
-    B -- No --> C[XDP_PASS]
-    B -- Yes --> D{EtherType is 0x8100 or 0x88a8?}
-    D -- No --> E[Count key 4096 as untagged]
-    E --> F[XDP_PASS]
-    D -- Yes --> G{VLAN header present?}
-    G -- No --> H[XDP_PASS]
-    G -- Yes --> I[Extract VLAN ID from TCI lower 12 bits]
-    I --> J[Increment seen_counter VLAN key]
-    J --> K{VLAN ID == 100?}
-    K -- Yes --> L[Increment pass_counter]
-    L --> M[XDP_PASS]
-    K -- No --> N[Increment drop_counter]
-    N --> O[XDP_DROP]
+    A[Packet at XDP] --> B{VLAN tagged?}
+    B -- No --> C[Count untagged key 4096]
+    C --> D[XDP_PASS]
+    B -- Yes --> E[Extract VLAN ID]
+    E --> F[Increment seen_counter]
+    F --> G{Mode}
+    G -- Baseline --> H[Static policy]
+    G -- Dynamic --> I[Lookup vlan_policy]
+    H --> J{Pass or drop?}
+    I --> J
+    J -- Pass --> K[Increment pass_counter]
+    J -- Drop --> L[Increment drop_counter]
+    K --> M[XDP_PASS]
+    L --> N[XDP_DROP]
 ```
 
-The program uses explicit bounds checks before reading packet headers. This is required by the BPF verifier and prevents unsafe packet memory access.
+The filter is VLAN-based, not IP-based. The validation uses IPv4 ping because it is simple to observe, but the XDP decision is made at Layer 2 before the payload protocol matters.
 
-## BPF Maps and Counters
+## BPF Maps
 
-The project uses three BPF maps for statistics:
+| Map | Mode | Type | Purpose |
+|---|---|---|---|
+| `seen_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Packets classified by VLAN or untagged key |
+| `pass_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Packets passed |
+| `drop_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Packets dropped |
+| `vlan_policy` | dynamic | `BPF_MAP_TYPE_HASH` | Runtime VLAN pass/drop policy |
 
-| Map | Type | Purpose |
-|---|---|---|
-| `seen_counter` | `BPF_MAP_TYPE_PERCPU_ARRAY` | Counts packets classified under each VLAN or untagged key. |
-| `pass_counter` | `BPF_MAP_TYPE_PERCPU_ARRAY` | Counts packets passed by the policy. |
-| `drop_counter` | `BPF_MAP_TYPE_PERCPU_ARRAY` | Counts packets dropped by the policy. |
-
-The maps are per-CPU arrays. Each CPU maintains its own counter value, reducing contention in the XDP fast path. The `show-stats.sh` script reads the pinned maps with `bpftool -j` and sums `.formatted.values[].value` with `jq` to display readable totals.
-
-Counter keys used by this project:
+Counter keys used by both modes:
 
 | Key | Meaning |
 |---:|---|
-| `100` | VLAN 100 traffic. |
-| `200` | VLAN 200 traffic. |
-| `4096` | Untagged traffic. |
+| `100` | VLAN 100 traffic |
+| `200` | VLAN 200 traffic |
+| `4096` | Untagged traffic |
 
-```mermaid
-flowchart LR
-    P[Classified packet] --> K{Counter key}
-    K -->|VLAN 100| V100[key 100]
-    K -->|VLAN 200| V200[key 200]
-    K -->|Untagged| U[key 4096]
-
-    V100 --> S[seen_counter]
-    V100 --> PA[pass_counter]
-    V200 --> S
-    V200 --> D[drop_counter]
-    U --> S
-    U --> PA
-
-    S --> R[show-stats.sh sums per-CPU values]
-    PA --> R
-    D --> R
-```
-
-
-
-## Final Validation Evidence
-
-The final behavior was validated in VBox Ubuntu 24.04. Evidence logs are stored under `results/logs/`.
-
-| Log                                  | What it proves                                                       |
-| ------------------------------------ | -------------------------------------------------------------------- |
-| `results/logs/final-test.log`        | VLAN 100 passed and VLAN 200 dropped during the functional test.     |
-| `results/logs/final-stats.log`       | BPF counters were readable and matched the expected policy behavior. |
-| `results/logs/final-bpftool-net.log` | XDP was attached on `filter-switch` `eth1` and `eth2`.               |
-
-Validation summary:
-
-| Item             |                       Result |
-| ---------------- | ---------------------------: |
-| VLAN 100 traffic |                       Passed |
-| VLAN 200 traffic |                      Dropped |
-| Untagged traffic |                       Passed |
-| XDP attachment   | Present on `eth1` and `eth2` |
-| Counters         |         Readable and correct |
-
-Example final counter output:
+Dynamic policy map path:
 
 ```text
-VLAN 100     seen=22   pass=22   drop=0
-VLAN 200     seen=8    pass=0    drop=8
-untagged     seen=2    pass=2    drop=0
+/sys/fs/bpf/xdp_vlan_dynamic/vlan_policy
 ```
 
-The exact numbers can change between runs because counters depend on the amount of generated traffic. The important invariant is that VLAN 100 has `pass > 0` and `drop = 0`, VLAN 200 has `drop > 0` and `pass = 0`, and untagged traffic is counted separately under key `4096`.
+Dynamic policy semantics:
 
-## Important Engineering Notes
+| Policy state | Meaning |
+|---|---|
+| Missing key | Pass by default |
+| `0` | Block/drop |
+| `1` | Pass/allow |
+| Invalid explicit value | Drop/fail closed |
 
-Several implementation details were important for correct XDP behavior in the virtual lab:
+`seen_counter`, `pass_counter`, and `drop_counter` are per-CPU arrays. Each CPU updates its own local value in the XDP fast path, and `scripts/show-stats.sh` sums the per-CPU values with `bpftool -j` and `jq`.
 
-| Detail                              | Why it matters                                                                                                                                  |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| VLAN reorder/offload disabled       | VLAN tags may be visible in `tcpdump` but hidden or reordered before XDP classification unless offloads or VLAN header reordering are disabled. |
-| MTU fixed at 1500                   | Consistent MTU on hosts, bridge ports, and the bridge avoids XDP attach and traffic issues caused by mismatched virtual interface defaults.     |
-| XDP attached after topology setup   | Interfaces and bpffs must exist before the program and maps can be loaded and pinned.                                                           |
-| `docker exec -i` used with heredocs | Keeping stdin open ensures the heredoc script body is executed inside the target container.                                                     |
-| bpftool JSON parsing                | Per-CPU array values are reported per CPU, so totals must be summed to display readable statistics.                                             |
+## Validation Proof
 
-These fixes are part of the final scripts and entrypoint configuration.
+### Baseline Proof
 
+Baseline mode was validated after attaching `src/vlan_filter.bpf.o`.
+
+Observed behavior:
+
+```text
+VLAN 100 ping passed
+VLAN 200 ping dropped
+XDP attached on filter-switch eth1 and eth2
+```
+
+Counter example:
+
+```text
+VLAN 100     seen=13       pass=13       drop=0
+VLAN 200     seen=6        pass=0        drop=6
+untagged     seen=2        pass=2        drop=0
+```
+
+### Dynamic Proof
+
+Dynamic mode was validated after attaching `src/vlan_filter_dynamic.bpf.o`.
+
+Observed behavior:
+
+```text
+VLAN 200 started blocked
+./scripts/vlan-policy.sh pass 200 changed VLAN 200 to explicitly allowed
+VLAN 200 ping passed
+./scripts/vlan-policy.sh block 200 changed VLAN 200 back to blocked
+VLAN 200 ping dropped
+```
+
+The same dynamic XDP program stayed attached during the policy changes:
+
+```text
+112: xdp name xdp_vlan_filter_dynamic tag c5ca799d563bf848
+```
+
+Dynamic counter example:
+
+```text
+VLAN 100     seen=10       pass=10       drop=0
+VLAN 200     seen=21       pass=8        drop=13
+untagged     seen=4        pass=4        drop=0
+```
+
+This proves that VLAN behavior changed from user space while the XDP program stayed loaded.
+
+### Policy Controller Proof
+
+The user-space controller was also tested for repeated operations and multiple entries:
+
+```text
+VLAN 400 changed from allowed by default to blocked
+Repeating block 400 reported VLAN 400 was already blocked
+VLAN 400 changed from blocked to explicitly allowed
+Repeating pass 400 reported VLAN 400 was already explicitly allowed
+list blocked showed VLAN 200, VLAN 300, and VLAN 500
+list all showed VLAN 200 blocked, VLAN 300 blocked, VLAN 400 explicitly allowed, and VLAN 500 blocked
+```
+
+Baseline validation logs are stored under `results/logs/`. The dynamic validation output is summarized above; separate dynamic log files can be added under `results/logs/` if persistent evidence is needed.
+
+## Repository Structure
+
+```text
+.
+├── src/
+│   ├── vlan_filter.bpf.c
+│   ├── vlan_filter_dynamic.bpf.c
+│   └── Makefile
+├── scripts/
+│   ├── build-bpf.sh
+│   ├── deploy.sh
+│   ├── attach-xdp.sh
+│   ├── attach-xdp-dynamic.sh
+│   ├── test.sh
+│   ├── validate-dynamic-policy.sh
+│   ├── vlan-policy.sh
+│   ├── show-stats.sh
+│   └── destroy.sh
+├── containerlab/
+│   ├── xdp-vlan-policy-filter.clab.yml
+│   ├── bin/entrypoint.sh
+│   └── configs/
+└── results/logs/
+```
+
+Generated files such as `src/vmlinux.h`, `src/*.bpf.o`, and `containerlab/clab-*` are ignored by Git.
+
+## Engineering Notes
+
+- XDP is attached on both `filter-switch` ports so policy enforcement is symmetric across the bridge.
+- VLAN offload and header reordering matter because VLAN tags must be visible to the XDP parser.
+- MTU is fixed at 1500 across the lab to avoid virtual interface mismatch issues.
+- Per-CPU maps reduce counter contention in the XDP fast path.
+- `bpftool -j` and `jq` are used to read pinned maps and produce readable counter and policy output.
+- Dynamic mode pins its maps under `/sys/fs/bpf/xdp_vlan_dynamic` to avoid confusion with baseline mode maps.
 
 ## Troubleshooting
 
 | Issue | Likely cause | Fix |
 |---|---|---|
-| XDP is not attached | `attach-xdp.sh` was not run, failed, or the lab is not running. | Run `./scripts/attach-xdp.sh` in the VBox/Linux environment and check the output. |
-| Error about peer MTU too large | Virtual interfaces or bridge MTU are inconsistent. | Re-run `./scripts/attach-xdp.sh`; it enforces MTU 1500 before attach. |
-| Counters show only untagged traffic | VLAN tags are being hidden by reorder/offload behavior. | Confirm `containerlab/bin/entrypoint.sh` ran and disabled VLAN reorder/offload. |
-| `show-stats.sh` prints missing or empty values | BPF maps are not pinned or XDP was not attached. | Run `./scripts/attach-xdp.sh`, then generate traffic with `./scripts/test.sh`. |
-| Generated Containerlab files appear in Git status | Containerlab created runtime state under `containerlab/clab-*`. | These folders are generated and ignored by `.gitignore`; remove them after destroying the lab if needed. |
+| Stale lab containers | Previous Containerlab run was not cleaned up. | Run `./scripts/destroy.sh`, then deploy again. |
+| XDP is not attached | Attach script was not run or failed. | Run the appropriate attach script and check `bpftool net`. |
+| Counters are missing | Maps are not pinned or the wrong map directory is being read. | Attach XDP first; for dynamic stats use `BPF_MAP_DIR=/sys/fs/bpf/xdp_vlan_dynamic ./scripts/show-stats.sh`. |
+| Dynamic policy map not found | Dynamic mode is not attached. | Run `./scripts/attach-xdp-dynamic.sh` before `./scripts/vlan-policy.sh`. |
+| VLAN tags are not classified | VLAN offload or header reordering hides tags from XDP. | Check the offload/reorder setup in `containerlab/bin/entrypoint.sh` and redeploy cleanly. |
 
 ## Cleanup
-
-To stop and clean the lab in the VBox/Linux environment:
 
 ```bash
 ./scripts/destroy.sh
 ```
-
-Containerlab runtime directories, BPF build artifacts, local archives, editor files, and temporary transfer folders are ignored by `.gitignore`. Final validation logs under `results/logs/` are intended to be kept as submission evidence.
-
-## Scope and Future Work
-
-This submission implements and validates the Basic and Intermediate requirements:
-
-| Scope item | Status |
-|---|---:|
-| Static VLAN pass/drop policy | Implemented |
-| Per-VLAN BPF counters | Implemented |
-| Dynamic user-space policy control | Not implemented |
-
-The Advanced requirement, dynamic policy changes via maps, is intentionally left as future work. A future version would add a policy map controlled from user space so VLAN pass/drop behavior could be changed without recompiling or reattaching the XDP program. That functionality is not included or claimed in this submission.
-
