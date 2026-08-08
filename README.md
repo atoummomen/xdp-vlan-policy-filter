@@ -2,26 +2,30 @@
 
 ## Overview
 
-This repository is a Containerlab-based networking lab that demonstrates VLAN policy enforcement with XDP/eBPF. The lab uses three Linux containers: `node1`, `filter-switch`, and `node2`. The middle `filter-switch` node bridges the two host links and runs XDP on both bridge-facing interfaces.
+This repository is a Containerlab-based networking lab that demonstrates VLAN policy enforcement with XDP/eBPF. The lab uses three Linux containers: `node1`, `filter-switch`, and `node2`. The middle `filter-switch` node acts as a Linux bridge and enforcement point, with XDP attached on both bridge-facing interfaces.
 
-The project demonstrates three practical eBPF capabilities: static VLAN filtering, per-VLAN BPF counters, and runtime policy control from user space. It includes a stable baseline mode and a dynamic policy mode. In dynamic mode, VLAN pass/drop behavior is changed through a pinned BPF map without rebuilding the BPF program and without reattaching XDP.
+The project demonstrates three practical eBPF capabilities:
 
-The main goal is to show how an XDP data-plane program can stay loaded while user space changes VLAN policy through BPF maps.
+- Static VLAN filtering.
+- Per-VLAN packet counters using BPF maps.
+- Runtime VLAN policy control from user space.
+
+The main goal is to show how an XDP data-plane program can stay loaded while user space changes VLAN pass/drop behavior through BPF maps, without rebuilding the BPF program and without reattaching XDP.
 
 ## Environment
 
-The lab was validated on VBox Ubuntu 24.04. WSL is useful for editing, Git, and documentation, but runtime validation should be done in a real Linux environment with BPF/XDP support.
+The lab was validated on VBox Ubuntu 24.04. WSL can be used for editing, Git, and documentation, but runtime validation should be done in a real Linux environment with BPF/XDP support.
 
 | Requirement | Purpose |
 |---|---|
 | Linux with BPF/XDP support | Runtime environment |
 | Docker | Lab containers |
 | Containerlab | Topology creation |
-| `bpftool` | Load programs, inspect maps, read counters |
-| clang/LLVM or build helper | Compile BPF objects |
-| Privileged/container networking support | Interfaces, VLANs, bridges, and XDP attach |
+| `bpftool` | Load programs, inspect XDP attachment, inspect maps, read counters |
+| clang/LLVM or the provided build helper | Compile BPF C programs into BPF object files |
+| Privileged/container networking support | Required for interfaces, VLANs, bridges, bpffs, and XDP attach |
 
-The scripts assume the runtime environment can create network namespaces, Linux bridges, VLAN interfaces, and pinned BPF objects under `/sys/fs/bpf`.
+The scripts assume the system can create network namespaces, Linux bridges, VLAN interfaces, and pinned BPF objects under `/sys/fs/bpf`.
 
 ## Project Levels
 
@@ -33,7 +37,7 @@ The scripts assume the runtime environment can create network namespaces, Linux 
 
 Level 1 is the baseline static mode: VLAN 100 passes, VLAN 200 drops, other tagged VLANs drop, and untagged traffic passes.
 
-Level 2 adds BPF counters that track packets seen, passed, and dropped per VLAN key.
+Level 2 adds counters that track packets seen, passed, and dropped per VLAN key.
 
 Level 3 adds dynamic mode, where user space can block or allow VLANs through a pinned BPF hash map without rebuilding the program and without reattaching XDP.
 
@@ -51,7 +55,7 @@ Level 3 adds dynamic mode, where user space can block or allow VLANs through a p
 +------------------+        +---------------------------+        +------------------+
 ```
 
-`node1` and `node2` generate VLAN-tagged traffic using VLAN subinterfaces. `filter-switch` is the enforcement point. XDP is attached to both `eth1` and `eth2`, so filtering is symmetric regardless of traffic direction.
+`node1` and `node2` generate VLAN-tagged traffic using VLAN subinterfaces. `filter-switch` bridges the two links. XDP is attached on both `filter-switch:eth1` and `filter-switch:eth2`, so filtering is symmetric regardless of traffic direction.
 
 ## Modes
 
@@ -60,9 +64,9 @@ Level 3 adds dynamic mode, where user space can block or allow VLANs through a p
 | Baseline static | `src/vlan_filter.bpf.c` | `scripts/attach-xdp.sh` | VLAN 100 passes; VLAN 200 and other tagged VLANs drop. |
 | Dynamic policy | `src/vlan_filter_dynamic.bpf.c` | `scripts/attach-xdp-dynamic.sh` | Missing key passes; `0` drops; `1` passes. |
 
-Only one XDP program is attached to an interface at a time. Running an attach script switches the lab to that mode.
+Only one XDP program is attached to each interface at a time. Running one of the attach scripts switches the lab to that mode.
 
-Example:
+Example dynamic policy update:
 
 ```bash
 ./scripts/vlan-policy.sh block 400
@@ -72,7 +76,7 @@ This updates the live dynamic policy map while the XDP program remains attached.
 
 ## Quick Start
 
-Run commands from the repository root in the Linux validation environment.
+Run all commands from the repository root in the Linux validation environment.
 
 ### 1. Build BPF Programs
 
@@ -80,14 +84,14 @@ Run commands from the repository root in the Linux validation environment.
 make -C src
 ```
 
-This builds both BPF objects:
+This builds both BPF object files:
 
 ```text
 src/vlan_filter.bpf.o
 src/vlan_filter_dynamic.bpf.o
 ```
 
-### 2. Deploy Lab
+### 2. Deploy the Lab
 
 ```bash
 ./scripts/deploy.sh
@@ -111,6 +115,12 @@ VLAN 200 drops
 Counters show VLAN 100 pass traffic and VLAN 200 drop traffic
 ```
 
+Check XDP attachment:
+
+```bash
+docker exec clab-xdp-vlan-policy-filter-filter-switch bpftool net
+```
+
 ### 4. Run Dynamic Mode
 
 ```bash
@@ -127,7 +137,7 @@ VLAN 200 can be changed back to block
 The dynamic XDP program stays attached during policy changes
 ```
 
-### 5. Manual Policy Control
+### 5. Manual Dynamic Policy Control
 
 ```bash
 ./scripts/vlan-policy.sh block 400
@@ -152,17 +162,17 @@ If the EtherType is `0x8100` for 802.1Q or `0x88a8` for 802.1AD, the program rea
 
 Untagged traffic is counted under key `4096`, which is outside the valid VLAN ID range `0..4095`, and is passed. Tagged traffic is counted under its VLAN ID.
 
-Baseline mode applies a static allowlist policy. Dynamic mode looks up the VLAN ID in `vlan_policy` and applies the user-space controlled policy. The counters record the final decision; they do not make the policy decision.
+Baseline mode applies a static allowlist policy. Dynamic mode looks up the VLAN ID in the `vlan_policy` hash map and applies the user-space controlled policy. The counters record the final decision; they do not make the forwarding decision.
 
 ```mermaid
 flowchart TD
-    A[Packet at XDP] --> B{VLAN tagged?}
-    B -- No --> C[Count untagged key 4096]
+    A[Packet reaches XDP] --> B{VLAN tagged?}
+    B -- No --> C[Count key 4096]
     C --> D[XDP_PASS]
     B -- Yes --> E[Extract VLAN ID]
     E --> F[Increment seen_counter]
     F --> G{Mode}
-    G -- Baseline --> H[Static policy]
+    G -- Baseline --> H[Static VLAN policy]
     G -- Dynamic --> I[Lookup vlan_policy]
     H --> J{Pass or drop?}
     I --> J
@@ -178,10 +188,10 @@ The filter is VLAN-based, not IP-based. The validation uses IPv4 ping because it
 
 | Map | Mode | Type | Purpose |
 |---|---|---|---|
-| `seen_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Packets classified by VLAN or untagged key |
-| `pass_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Packets passed |
-| `drop_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Packets dropped |
-| `vlan_policy` | dynamic | `BPF_MAP_TYPE_HASH` | Runtime VLAN pass/drop policy |
+| `seen_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Counts packets classified by VLAN or untagged key |
+| `pass_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Counts packets passed by the policy |
+| `drop_counter` | both | `BPF_MAP_TYPE_PERCPU_ARRAY` | Counts packets dropped by the policy |
+| `vlan_policy` | dynamic | `BPF_MAP_TYPE_HASH` | Runtime VLAN pass/drop policy controlled from user space |
 
 Counter keys used by both modes:
 
@@ -206,7 +216,13 @@ Dynamic policy semantics:
 | `1` | Pass/allow |
 | Invalid explicit value | Drop/fail closed |
 
-`seen_counter`, `pass_counter`, and `drop_counter` are per-CPU arrays. Each CPU updates its own local value in the XDP fast path, and `scripts/show-stats.sh` sums the per-CPU values with `bpftool -j` and `jq`.
+`seen_counter`, `pass_counter`, and `drop_counter` are per-CPU arrays. Each CPU updates its own local value in the XDP fast path. `scripts/show-stats.sh` reads the pinned maps with `bpftool -j` and uses `jq` to sum per-CPU values.
+
+For dynamic mode counters, use:
+
+```bash
+BPF_MAP_DIR=/sys/fs/bpf/xdp_vlan_dynamic ./scripts/show-stats.sh
+```
 
 ## Validation Proof
 
@@ -262,7 +278,7 @@ This proves that VLAN behavior changed from user space while the XDP program sta
 
 ### Policy Controller Proof
 
-The user-space controller was also tested for repeated operations and multiple entries:
+The user-space policy controller was also tested for repeated operations and multiple entries:
 
 ```text
 VLAN 400 changed from allowed by default to blocked
@@ -277,12 +293,27 @@ Baseline validation logs are stored under `results/logs/`. The dynamic validatio
 
 ## Repository Structure
 
+This tree shows the clean tracked repository structure. Runtime files created by Containerlab and BPF build artifacts are generated locally and are intentionally ignored by Git.
+
 ```text
 .
-├── src/
-│   ├── vlan_filter.bpf.c
-│   ├── vlan_filter_dynamic.bpf.c
-│   └── Makefile
+├── Dockerfile
+├── README.md
+├── bpf-builder/
+│   └── Dockerfile
+├── containerlab/
+│   ├── xdp-vlan-policy-filter.clab.yml
+│   ├── bin/
+│   │   └── entrypoint.sh
+│   └── configs/
+│       ├── filter-switch.cfg
+│       ├── node1.cfg
+│       └── node2.cfg
+├── results/
+│   └── logs/
+│       ├── final-bpftool-net.log
+│       ├── final-stats.log
+│       └── final-test.log
 ├── scripts/
 │   ├── build-bpf.sh
 │   ├── deploy.sh
@@ -293,14 +324,19 @@ Baseline validation logs are stored under `results/logs/`. The dynamic validatio
 │   ├── vlan-policy.sh
 │   ├── show-stats.sh
 │   └── destroy.sh
-├── containerlab/
-│   ├── xdp-vlan-policy-filter.clab.yml
-│   ├── bin/entrypoint.sh
-│   └── configs/
-└── results/logs/
+└── src/
+    ├── Makefile
+    ├── vlan_filter.bpf.c
+    └── vlan_filter_dynamic.bpf.c
 ```
 
-Generated files such as `src/vmlinux.h`, `src/*.bpf.o`, and `containerlab/clab-*` are ignored by Git.
+Generated files such as the following are created during build or deployment and are not part of the clean repository tree:
+
+```text
+src/vmlinux.h
+src/*.bpf.o
+containerlab/clab-*
+```
 
 ## Engineering Notes
 
@@ -319,7 +355,7 @@ Generated files such as `src/vmlinux.h`, `src/*.bpf.o`, and `containerlab/clab-*
 | XDP is not attached | Attach script was not run or failed. | Run the appropriate attach script and check `bpftool net`. |
 | Counters are missing | Maps are not pinned or the wrong map directory is being read. | Attach XDP first; for dynamic stats use `BPF_MAP_DIR=/sys/fs/bpf/xdp_vlan_dynamic ./scripts/show-stats.sh`. |
 | Dynamic policy map not found | Dynamic mode is not attached. | Run `./scripts/attach-xdp-dynamic.sh` before `./scripts/vlan-policy.sh`. |
-| VLAN tags are not classified | VLAN offload or header reordering hides tags from XDP. | Check the offload/reorder setup in `containerlab/bin/entrypoint.sh` and redeploy cleanly. |
+| VLAN tags are not classified | VLAN offload or header reordering may hide tags from XDP. | Check the offload/reorder setup in `containerlab/bin/entrypoint.sh` and redeploy cleanly. |
 
 ## Cleanup
 
