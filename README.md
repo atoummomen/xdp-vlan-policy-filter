@@ -43,19 +43,39 @@ Level 3 adds dynamic mode, where user space can block or allow VLANs through a p
 
 ## Topology
 
-The lab uses a simple three-node topology. `node1` and `node2` generate VLAN-tagged traffic, while `filter-switch` acts as the bridge and XDP enforcement point.
+The lab uses a three-node topology. `node1` and `node2` generate VLAN-tagged traffic, while `filter-switch` acts as the Linux bridge and XDP enforcement point.
 
 ```mermaid
 flowchart LR
-    N1["node1<br/>eth1.100: 10.100.0.1/24<br/>eth1.200: 10.200.0.1/24"]
-    FS["filter-switch<br/>eth1 → br0 → eth2<br/>XDP attached on eth1 and eth2"]
-    N2["node2<br/>eth1.100: 10.100.0.2/24<br/>eth1.200: 10.200.0.2/24"]
+    subgraph N1[node1]
+        N1E[eth1]
+        N1100[eth1.100<br/>10.100.0.1/24]
+        N1200[eth1.200<br/>10.200.0.1/24]
+    end
 
-    N1 <-->|"VLAN 100 / VLAN 200"| FS
-    FS <-->|"VLAN 100 / VLAN 200"| N2
+    subgraph FS[filter-switch]
+        F1[eth1<br/>XDP attached]
+        BR[br0<br/>Linux bridge]
+        F2[eth2<br/>XDP attached]
+    end
+
+    subgraph N2[node2]
+        N2E[eth1]
+        N2100[eth1.100<br/>10.100.0.2/24]
+        N2200[eth1.200<br/>10.200.0.2/24]
+    end
+
+    N1100 -. VLAN 100 .- N1E
+    N1200 -. VLAN 200 .- N1E
+    N1E <--> F1
+    F1 <--> BR
+    BR <--> F2
+    F2 <--> N2E
+    N2E -. VLAN 100 .- N2100
+    N2E -. VLAN 200 .- N2200
 ```
 
-`filter-switch` is the enforcement point. XDP is attached to both bridge-facing interfaces, so packets are checked before normal Linux bridge forwarding and the policy is applied in both directions.
+`filter-switch` is the enforcement point. XDP is attached on both bridge-facing interfaces, so packets are checked before normal Linux bridge forwarding and the policy is applied in both directions.
 
 ## Modes
 
